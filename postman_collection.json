@@ -1,0 +1,85 @@
+{
+	"info": {
+		"_postman_id": "7b199c73-2399-4ec1-ab91-ae73165cb17c",
+		"name": "OpenAI Chat",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "43696603"
+	},
+	"item": [
+		{
+			"name": "POST /chat",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"title\": \"test title\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/chat",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"chat"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "PUT /chat/:chatThreadId",
+			"request": {
+				"method": "PUT",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"content\": \"Write a function to reverse a string\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:3000/chat/:chatThreadId",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "3000",
+					"path": [
+						"chat",
+						":chatThreadId"
+					],
+					"variable": [
+						{
+							"key": "chatThreadId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

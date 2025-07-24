@@ -1,0 +1,12 @@
+{
+  "name": "openai-chat",
+  "dependencies": {
+    "axios": "^1.11.0",
+    "express": "^5.1.0",
+    "mongoose": "^8.16.4",
+    "tiktoken": "^1.0.21"
+  },
+  "scripts": {
+    "start": "node --env-file=.env ."
+  }
+}
