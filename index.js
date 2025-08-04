@@ -44,15 +44,38 @@ const systemPrompt = {
 
 app.use(express.json());
 
+app.get('/chat', async (req, res) => {
+  try {
+    const chatThreads = await ChatThread.find().sort({ updatedAt: -1 });
+    res.json({ chatThreads });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/chat/:chatThreadId', async (req, res) => {
+  try {
+    const { chatThreadId } = req.params;
+    const chatThread = await ChatThread.findOne({ _id: chatThreadId });
+    const chatMessages = await ChatMessage.find({ chatThreadId }).sort({ createdAt: 1 });
+    res.json({ chatThread, chatMessages });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 app.post('/chat', async(req, res) => {
   try {
-    const chatThread = await ChatThread.create({ title: req.body.title });
+    const chatThread = await ChatThread.create({
+      title: req.body.title
+    });
     res.json({ chatThread });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
 });
 
+// Stream tokens from OpenAI for chat completion
 app.put('/chat/:chatThreadId', async(req, res) => {
   try {
     const { chatThreadId } = req.params;
@@ -66,35 +89,110 @@ app.put('/chat/:chatThreadId', async(req, res) => {
     }));
     llmMessages.push({ role: 'user', content });
 
-    const chatMessages = await Promise.all([
-      ChatMessage.create({
-        chatThreadId,
-        content,
-        role: 'user'
-      }),
-      getChatCompletion([systemPrompt, ...trimMessagesToFit(llmMessages)]).then(response => ChatMessage.create({
-        chatThreadId,
-        content: response.data.choices[0].message.content,
-        role: 'assistant'
-      }))
-    ]);
+    // Save user message immediately
+    const userMessage = await ChatMessage.create({
+      chatThreadId,
+      content,
+      role: 'user'
+    });
 
-    if (!chatThread.title) {
-      const systemPrompt = {
-        role: 'system',
-        content: 'Summarize the following conversation in a short sentence 3-8 words.'
-      };
-      const response = await getChatCompletion(
-        [systemPrompt, ...trimMessagesToFit(llmMessages, 'gpt-4.1-nano', 5000)],
-        'gpt-4.1-nano'
-      );
-      chatThread.title = response.data.choices[0].message.content;
-      await chatThread.save();
+    // Set headers for streaming
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Helper to send SSE data
+    function sendSSE(data) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
     }
 
-    res.json({ chatThread, chatMessages });
+    // Stream assistant response from OpenAI
+    let assistantContent = '';
+    let assistantMessageDoc = null;
+
+    // Start OpenAI streaming request
+    const response = await axios({
+      method: 'post',
+      url: 'https://api.openai.com/v1/chat/completions',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      responseType: 'stream',
+      data: {
+        model: 'gpt-4o',
+        messages: [systemPrompt, ...trimMessagesToFit(llmMessages)],
+        stream: true
+      }
+    });
+
+    response.data.on('data', async (chunk) => {
+      const lines = chunk.toString().split('\n').filter(line => line.trim() !== '');
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const data = line.replace(/^data:\s*/, '');
+          if (data === '[DONE]') {
+            // Save assistant message to DB
+            if (!assistantMessageDoc) {
+              assistantMessageDoc = await ChatMessage.create({
+                chatThreadId,
+                content: assistantContent,
+                role: 'assistant'
+              });
+            }
+            // If no title, generate one (non-streaming)
+            if (!chatThread.title) {
+              const systemPromptTitle = {
+                role: 'system',
+                content: 'Summarize the following conversation in a short sentence 3-8 words.'
+              };
+              const titleResponse = await getChatCompletion(
+                [systemPromptTitle, ...trimMessagesToFit(llmMessages, 'gpt-4.1-nano', 5000)],
+                'gpt-4.1-nano'
+              );
+              chatThread.title = titleResponse.data.choices[0].message.content;
+              await chatThread.save();
+            }
+            // Send final SSE event and close
+            sendSSE({ done: true, chatThread, userMessage, assistantMessage: assistantMessageDoc });
+            res.end();
+            return;
+          }
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) {
+              assistantContent += delta;
+              sendSSE({ token: delta });
+            }
+          } catch (e) {
+            // Ignore JSON parse errors for non-data lines
+          }
+        }
+      }
+    });
+
+    response.data.on('end', () => {
+      // If for some reason [DONE] wasn't sent, end the response
+      if (!res.writableEnded) {
+        res.end();
+      }
+    });
+
+    response.data.on('error', (err) => {
+      if (!res.headersSent) {
+        res.status(500).json({ message: err.message });
+      } else {
+        res.end();
+      }
+    });
+
   } catch (err) {
-    return res.status(500).json({ message: err.message });
+    if (!res.headersSent) {
+      return res.status(500).json({ message: err.message });
+    } else {
+      res.end();
+    }
   }
 });
 
@@ -122,5 +220,6 @@ function trimMessagesToFit(messages, model = 'gpt-4o', maxTokens = 120000) {
   return trimmed;
 }
 
+app.use(express.static('./public'));
 app.listen(3000);
 console.log('Listening on port 3000');

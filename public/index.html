@@ -1,0 +1,383 @@
+<html>
+  <head>
+    <title>JS Ahoy!</title>
+
+    <link rel="stylesheet" href="/tw.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+      pre {
+        background-color: #f5f5f5;
+        color: #222;
+        padding: 4px;
+        border-radius: 4px;
+        margin-top: 4px;
+        margin-bottom: 4px;
+      }
+    </style>
+  </head>
+  <body>
+  <div id="app" class="flex flex-col h-screen bg-gray-100">
+    <!-- Top Bar -->
+    <header class="flex items-center bg-blue-700 text-white px-6 py-4 shadow">
+      <img src="/js-ahoy.png" alt="JS Ahoy Logo" class="h-12 w-12 mr-3 bg-white rounded-full">
+      <h1 class="text-2xl font-bold tracking-wide">JS Ahoy!</h1>
+    </header>
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Sidebar -->
+      <aside class="w-64 bg-blue-800 text-white flex flex-col py-4 px-2 overflow-y-auto">
+        <h2 class="text-lg font-semibold mb-4 px-2">Threads</h2>
+        <ul class="space-y-2">
+          <li v-for="thread in threads" :key="thread._id">
+            <button
+              class="w-full text-left px-3 py-2 rounded focus:outline-none"
+              :class="selectedThreadId === thread._id ? 'bg-blue-700 hover:bg-blue-600 font-bold' : 'hover:bg-blue-700'"
+              @click="selectThread(thread._id)"
+            >
+              <span class="font-bold" v-if="selectedThreadId === thread._id">🏴‍☠️ {{ thread.title || 'Untitled Thread' }}</span>
+              <span v-else>{{ thread.title || 'Untitled Thread' }}</span>
+              <div class="text-xs text-blue-200" v-if="thread.lastMessage">
+                Last message: "{{ threadLastMessage(thread) }}"
+              </div>
+            </button>
+          </li>
+        </ul>
+        <div v-if="showNewThreadInput" class="mt-6 mx-2 flex space-x-2">
+          <input
+            v-model="newThreadTitle"
+            class="flex-1 px-2 py-1 rounded border border-gray-300 text-black"
+            placeholder="Thread title"
+            @keyup.enter="createThread"
+          >
+          <button
+            class="bg-yellow-400 text-blue-900 rounded font-bold px-3 hover:bg-yellow-300 transition"
+            @click="createThread"
+          >Create</button>
+          <button
+            class="text-white px-2"
+            @click="showNewThreadInput = false"
+            title="Cancel"
+          >&times;</button>
+        </div>
+        <button
+          v-else
+          class="mt-6 mx-2 py-2 px-4 bg-yellow-400 text-blue-900 rounded font-bold hover:bg-yellow-300 transition"
+          @click="showNewThreadInput = true"
+        >+ New Thread</button>
+      </aside>
+      <!-- Main Chat Area -->
+      <main class="flex-1 flex flex-col bg-white rounded-tl-3xl shadow-lg overflow-hidden">
+        <div ref="chatArea" class="flex-1 p-6 overflow-y-auto flex flex-col space-y-4">
+          <div v-if="loadingMessages" class="text-gray-400 text-center py-8">Loading messages...</div>
+          <template v-else>
+            <div
+              v-for="(msg, idx) in messages"
+              :key="msg._id || idx"
+              class="flex items-start space-x-3"
+              :class="msg.role === 'user' ? '' : ''"
+            >
+              <div class="flex-shrink-0">
+                <img
+                  v-if="msg.role === 'user'"
+                  class="h-10 w-10 rounded-full border-2 border-blue-800"
+                  src="https://randomuser.me/api/portraits/men/32.jpg"
+                  alt="User"
+                >
+                <img
+                  v-else
+                  class="h-10 w-10 rounded-full border-2 border-yellow-500"
+                  src="/js-ahoy.png"
+                  alt="Assistant"
+                >
+              </div>
+              <div>
+                <div class="flex items-center space-x-2">
+                  <span
+                    class="font-bold"
+                    :class="msg.role === 'user' ? 'text-blue-900' : 'text-yellow-700'"
+                  >
+                    {{ msg.role === 'user' ? 'You' : 'JS Ahoy Bot' }}
+                  </span>
+                  <span class="text-xs text-gray-400">{{ formatTime(msg.createdAt) }}</span>
+                </div>
+                <div
+                  class="rounded-lg px-4 py-2 mt-1 max-w-4xl overflow-hidden"
+                  :class="msg.role === 'user'
+                    ? 'bg-blue-100 text-blue-900'
+                    : 'bg-yellow-100 text-yellow-900'"
+                  v-html="marked.marked(msg.content)"
+                ></div>
+              </div>
+            </div>
+            <!-- Streaming assistant message -->
+            <div v-if="streaming && assistantStreamingContent" class="flex items-start space-x-3">
+              <div class="flex-shrink-0">
+                <img
+                  class="h-10 w-10 rounded-full border-2 border-yellow-500"
+                  src="/js-ahoy.png"
+                  alt="Assistant"
+                >
+              </div>
+              <div>
+                <div class="flex items-center space-x-2">
+                  <span class="font-bold text-yellow-700">JS Ahoy Bot</span>
+                  <span class="text-xs text-gray-400">...</span>
+                </div>
+                <div class="bg-yellow-100 text-yellow-900 rounded-lg px-4 py-2 mt-1 max-w-4xl">
+                  <span v-html="marked.marked(assistantStreamingContent)"></span>
+                  <span class="animate-pulse">▌</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <!-- Message Input -->
+        <div class="border-t px-6 py-4 bg-gray-50 flex items-center">
+          <input
+            type="text"
+            class="flex-1 px-4 py-2 rounded-l-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            placeholder="Type yer message, matey..."
+            v-model="messageInput"
+            :disabled="!selectedThreadId || sendingMessage"
+            @keyup.enter="sendMessage"
+          >
+          <button
+            class="bg-blue-800 text-white px-6 py-2 rounded-r-lg font-bold hover:bg-blue-700 transition"
+            :disabled="!selectedThreadId || sendingMessage || !messageInput.trim()"
+            @click="sendMessage"
+          >Send</button>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+  const { createApp, ref, reactive, onMounted, computed, nextTick } = Vue;
+
+  createApp({
+    setup() {
+      const threads = ref([]);
+      const loadingThreads = ref(false);
+      const selectedThreadId = ref(null);
+      const messages = ref([]);
+      const loadingMessages = ref(false);
+      const newThreadTitle = ref('');
+      const showNewThreadInput = ref(false);
+      const messageInput = ref('');
+      const sendingMessage = ref(false);
+      const streaming = ref(false);
+      const assistantStreamingContent = ref('');
+      const chatArea = ref(null);
+
+      // Fetch threads
+      async function fetchThreads() {
+        loadingThreads.value = true;
+        try {
+          const res = await fetch('/chat');
+          const data = await res.json();
+          threads.value = data.chatThreads;
+          // Select first thread by default
+          if (!selectedThreadId.value && threads.value.length > 0) {
+            selectThread(threads.value[0]._id);
+          }
+        } finally {
+          loadingThreads.value = false;
+        }
+      }
+
+      // Fetch messages for a thread (GET /chat/:threadId returns all messages)
+      async function fetchMessages(threadId) {
+        loadingMessages.value = true;
+        messages.value = [];
+        try {
+          const res = await fetch(`/chat/${threadId}`);
+          if (!res.ok) throw new Error('Failed to fetch messages');
+          messages.value = await res.json().then(res => res.chatMessages);
+          await nextTick();
+          scrollToBottom();
+        } catch (e) {
+          messages.value = [];
+        } finally {
+          loadingMessages.value = false;
+          await nextTick();
+          scrollToBottom();
+        }
+      }
+
+      // Select a thread
+      async function selectThread(threadId) {
+        if (selectedThreadId.value !== threadId) {
+          selectedThreadId.value = threadId;
+          assistantStreamingContent.value = '';
+          await fetchMessages(threadId);
+        }
+      }
+
+      // Create a new thread
+      async function createThread() {
+        if (!newThreadTitle.value.trim()) return;
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newThreadTitle.value })
+        });
+        const data = await res.json();
+        threads.value.unshift(data.chatThread);
+        newThreadTitle.value = '';
+        showNewThreadInput.value = false;
+        selectThread(data.chatThread._id);
+      }
+
+      // Send a message (with fetch stream)
+      async function sendMessage() {
+        if (!messageInput.value.trim() || !selectedThreadId.value) return;
+        sendingMessage.value = true;
+        streaming.value = true;
+        assistantStreamingContent.value = '';
+        // Optimistically add user message
+        const userMsg = {
+          role: 'user',
+          content: messageInput.value,
+          createdAt: new Date().toISOString(),
+          _id: 'temp-' + Math.random()
+        };
+        messages.value.push(userMsg);
+        const threadId = selectedThreadId.value;
+        const inputContent = messageInput.value;
+        messageInput.value = '';
+        await nextTick();
+        scrollToBottom();
+
+        // Streaming assistant response using fetch PUT and parsing SSE lines
+        let assistantMsg = {
+          role: 'assistant',
+          content: '',
+          createdAt: new Date().toISOString(),
+          _id: 'temp-assistant-' + Math.random()
+        };
+
+        try {
+          const res = await fetch(`/chat/${threadId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: inputContent }),
+          });
+
+          if (!res.body) throw new Error('No response body for streaming');
+
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let done = false;
+
+          while (!done) {
+            const { value, done: streamDone } = await reader.read();
+            if (streamDone) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process all complete SSE events in buffer
+            let eventIdx;
+            while ((eventIdx = buffer.indexOf('\n\n')) !== -1) {
+              const eventBlock = buffer.slice(0, eventIdx);
+              buffer = buffer.slice(eventIdx + 2);
+
+              // Only process data: lines
+              const lines = eventBlock.split('\n');
+              for (const line of lines) {
+                if (line.startsWith('data:')) {
+                  const dataStr = line.replace(/^data:\s*/, '');
+                  try {
+                    const data = JSON.parse(dataStr);
+                    if (data.token) {
+                      assistantStreamingContent.value += data.token;
+                      assistantMsg.content = assistantStreamingContent.value;
+                      await nextTick();
+                      scrollToBottom();
+                    }
+                    if (data.done) {
+                      // Replace temp assistant message with real one if needed
+                      if (data.assistantMessage) {
+                        assistantMsg._id = data.assistantMessage._id;
+                        assistantMsg.content = data.assistantMessage.content;
+                      }
+                      messages.value.push(assistantMsg);
+                      // Update thread title if changed
+                      if (data.chatThread) {
+                        const idx = threads.value.findIndex(t => t._id === data.chatThread._id);
+                        if (idx !== -1) threads.value[idx] = data.chatThread;
+                      }
+                      streaming.value = false;
+                      sendingMessage.value = false;
+                      await nextTick();
+                      scrollToBottom();
+                      done = true;
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Error during streaming
+        } finally {
+          streaming.value = false;
+          sendingMessage.value = false;
+        }
+      }
+
+      // Scroll chat to bottom
+      function scrollToBottom() {
+        if (chatArea.value) {
+          chatArea.value.scrollTop = chatArea.value.scrollHeight;
+        }
+      }
+
+      // Format time
+      function formatTime(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      // Get thread last message preview
+      function threadLastMessage(thread) {
+        if (!thread.lastMessage) return '';
+        let content = thread.lastMessage.content;
+        if (content.length > 40) content = content.slice(0, 40) + '...';
+        return content;
+      }
+
+      // On mount, fetch threads
+      onMounted(() => {
+        fetchThreads();
+      });
+
+      return {
+        threads,
+        loadingThreads,
+        selectedThreadId,
+        messages,
+        loadingMessages,
+        newThreadTitle,
+        showNewThreadInput,
+        messageInput,
+        sendingMessage,
+        streaming,
+        assistantStreamingContent,
+        chatArea,
+        fetchThreads,
+        selectThread,
+        createThread,
+        sendMessage,
+        formatTime,
+        threadLastMessage,
+        scrollToBottom,
+        marked
+      };
+    }
+  }).mount('#app');
+  </script>
+  </body>
+</html>
