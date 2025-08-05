@@ -13,6 +13,7 @@
         border-radius: 4px;
         margin-top: 4px;
         margin-bottom: 4px;
+        overflow-x: scroll;
       }
     </style>
   </head>
@@ -36,33 +37,12 @@
               >
                 <span class="font-bold" v-if="selectedThreadId === thread._id">🏴‍☠️ {{ thread.title || 'Untitled Thread' }}</span>
                 <span v-else>{{ thread.title || 'Untitled Thread' }}</span>
-                <div class="text-xs text-blue-200" v-if="thread.lastMessage">
-                  Last message: "{{ threadLastMessage(thread) }}"
-                </div>
               </button>
             </li>
           </ul>
-          <div v-if="showNewThreadInput" class="mt-6 mx-2 flex space-x-2">
-            <input
-              v-model="newThreadTitle"
-              class="flex-1 px-2 py-1 rounded border border-gray-300 text-black"
-              placeholder="Thread title"
-              @keyup.enter="createThread"
-            >
-            <button
-              class="bg-yellow-400 text-blue-900 rounded font-bold px-3 hover:bg-yellow-300 transition"
-              @click="createThread"
-            >Create</button>
-            <button
-              class="text-white px-2"
-              @click="showNewThreadInput = false"
-              title="Cancel"
-            >&times;</button>
-          </div>
           <button
-            v-else
             class="mt-6 mx-2 py-2 px-4 bg-yellow-400 text-blue-900 rounded font-bold hover:bg-yellow-300 transition"
-            @click="showNewThreadInput = true"
+            @click="createThread"
           >+ New Thread</button>
         </aside>
         <!-- Main Chat Area -->
@@ -161,8 +141,6 @@
           const selectedThreadId = ref(null);
           const messages = ref([]);
           const loadingMessages = ref(false);
-          const newThreadTitle = ref('');
-          const showNewThreadInput = ref(false);
           const messageInput = ref('');
           const sendingMessage = ref(false);
           const streaming = ref(false);
@@ -215,16 +193,13 @@
 
           // Create a new thread
           async function createThread() {
-            if (!newThreadTitle.value.trim()) return;
             const res = await fetch('/chat', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title: newThreadTitle.value })
+              body: JSON.stringify({ })
             });
             const data = await res.json();
             threads.value.unshift(data.chatThread);
-            newThreadTitle.value = '';
-            showNewThreadInput.value = false;
             selectThread(data.chatThread._id);
           }
 
@@ -280,43 +255,7 @@
                 while ((eventIdx = buffer.indexOf('\n\n')) !== -1) {
                   const eventBlock = buffer.slice(0, eventIdx);
                   buffer = buffer.slice(eventIdx + 2);
-
-                  // Only process data: lines
-                  const lines = eventBlock.split('\n');
-                  for (const line of lines) {
-                    if (line.startsWith('data:')) {
-                      const dataStr = line.replace(/^data:\s*/, '');
-                      try {
-                        const data = JSON.parse(dataStr);
-                        if (data.token) {
-                          assistantStreamingContent.value += data.token;
-                          assistantMsg.content = assistantStreamingContent.value;
-                          await nextTick();
-                          scrollToBottom();
-                        }
-                        if (data.done) {
-                          // Replace temp assistant message with real one if needed
-                          if (data.assistantMessage) {
-                            assistantMsg._id = data.assistantMessage._id;
-                            assistantMsg.content = data.assistantMessage.content;
-                          }
-                          messages.value.push(assistantMsg);
-                          // Update thread title if changed
-                          if (data.chatThread) {
-                            const idx = threads.value.findIndex(t => t._id === data.chatThread._id);
-                            if (idx !== -1) threads.value[idx] = data.chatThread;
-                          }
-                          streaming.value = false;
-                          sendingMessage.value = false;
-                          await nextTick();
-                          scrollToBottom();
-                          done = true;
-                        }
-                      } catch (e) {
-                        // Ignore parse errors
-                      }
-                    }
-                  }
+                  await processEventBlock(eventBlock);
                 }
               }
             } catch (e) {
@@ -324,6 +263,45 @@
             } finally {
               streaming.value = false;
               sendingMessage.value = false;
+            }
+          }
+
+          async function processEventBlock(eventBlock) {
+            // Only process data: lines
+            const lines = eventBlock.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data:')) {
+                const dataStr = line.replace(/^data:\s*/, '');
+                try {
+                  const data = JSON.parse(dataStr);
+                  if (data.token) {
+                    assistantStreamingContent.value += data.token;
+                    assistantMsg.content = assistantStreamingContent.value;
+                    await nextTick();
+                    scrollToBottom();
+                  }
+                  if (data.done) {
+                    // Replace temp assistant message with real one if needed
+                    if (data.assistantMessage) {
+                      assistantMsg._id = data.assistantMessage._id;
+                      assistantMsg.content = data.assistantMessage.content;
+                    }
+                    messages.value.push(assistantMsg);
+                    // Update thread title if changed
+                    if (data.chatThread) {
+                      const idx = threads.value.findIndex(t => t._id === data.chatThread._id);
+                      if (idx !== -1) threads.value[idx] = data.chatThread;
+                    }
+                    streaming.value = false;
+                    sendingMessage.value = false;
+                    await nextTick();
+                    scrollToBottom();
+                    done = true;
+                  }
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
             }
           }
 
@@ -341,14 +319,6 @@
             return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           }
 
-          // Get thread last message preview
-          function threadLastMessage(thread) {
-            if (!thread.lastMessage) return '';
-            let content = thread.lastMessage.content;
-            if (content.length > 40) content = content.slice(0, 40) + '...';
-            return content;
-          }
-
           // On mount, fetch threads
           onMounted(() => {
             fetchThreads();
@@ -360,8 +330,6 @@
             selectedThreadId,
             messages,
             loadingMessages,
-            newThreadTitle,
-            showNewThreadInput,
             messageInput,
             sendingMessage,
             streaming,
@@ -372,7 +340,6 @@
             createThread,
             sendMessage,
             formatTime,
-            threadLastMessage,
             scrollToBottom,
             marked
           };

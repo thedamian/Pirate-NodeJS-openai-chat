@@ -79,7 +79,7 @@ app.post('/chat', async(req, res) => {
 app.put('/chat/:chatThreadId', async(req, res) => {
   try {
     const { chatThreadId } = req.params;
-    const { content } = req.body;
+    const { content: userContent } = req.body;
     const chatThread = await ChatThread.findOne({ _id: chatThreadId }).orFail();
 
     const messages = await ChatMessage.find({ chatThreadId }).sort({ createdAt: 1 });
@@ -87,12 +87,12 @@ app.put('/chat/:chatThreadId', async(req, res) => {
       role: m.role,
       content: m.content
     }));
-    llmMessages.push({ role: 'user', content });
+    llmMessages.push({ role: 'user', content: userContent });
 
     // Save user message immediately
     const userMessage = await ChatMessage.create({
       chatThreadId,
-      content,
+      content: userContent,
       role: 'user'
     });
 
@@ -103,11 +103,11 @@ app.put('/chat/:chatThreadId', async(req, res) => {
 
     // Helper to send SSE data
     function sendSSE(data) {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      return res.write(`data: ${JSON.stringify(data)}\n\n`);
     }
 
     // Stream assistant response from OpenAI
-    let assistantContent = '';
+    let content = '';
     let assistantMessageDoc = null;
 
     // Start OpenAI streaming request
@@ -133,40 +133,25 @@ app.put('/chat/:chatThreadId', async(req, res) => {
           const data = line.replace(/^data:\s*/, '');
           if (data === '[DONE]') {
             // Save assistant message to DB
-            if (!assistantMessageDoc) {
-              assistantMessageDoc = await ChatMessage.create({
-                chatThreadId,
-                content: assistantContent,
-                role: 'assistant'
-              });
-            }
-            // If no title, generate one (non-streaming)
-            if (!chatThread.title) {
-              const systemPromptTitle = {
-                role: 'system',
-                content: 'Summarize the following conversation in a short sentence 3-8 words.'
-              };
-              const titleResponse = await getChatCompletion(
-                [systemPromptTitle, ...trimMessagesToFit(llmMessages, 'gpt-4.1-nano', 5000)],
-                'gpt-4.1-nano'
-              );
-              chatThread.title = titleResponse.data.choices[0].message.content;
-              await chatThread.save();
-            }
+            assistantMessageDoc = new ChatMessage({ chatThreadId, content, role: 'assistant' });
+            await assistantMessageDoc.save();
+            // Summarize if necessary
+            await summarizeThread(chatThread, llmMessages);
             // Send final SSE event and close
             sendSSE({ done: true, chatThread, userMessage, assistantMessage: assistantMessageDoc });
             res.end();
             return;
-          }
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) {
-              assistantContent += delta;
-              sendSSE({ token: delta });
+          } else {
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                content += delta;
+                sendSSE({ token: delta });
+              }
+            } catch (e) {
+              // Avoid JSON parsing errors from partial responses
             }
-          } catch (e) {
-            // Ignore JSON parse errors for non-data lines
           }
         }
       }
@@ -174,7 +159,7 @@ app.put('/chat/:chatThreadId', async(req, res) => {
 
     response.data.on('end', () => {
       // If for some reason [DONE] wasn't sent, end the response
-      if (!res.writableEnded) {
+      if (!res.writableEnded && !assistantMessageDoc) {
         res.end();
       }
     });
@@ -218,6 +203,21 @@ function trimMessagesToFit(messages, model = 'gpt-4o', maxTokens = 120000) {
   }
 
   return trimmed;
+}
+
+async function summarizeThread(chatThread, llmMessages) {
+  if (!chatThread.title) {
+    const systemPromptTitle = {
+      role: 'system',
+      content: 'Summarize the following conversation in a short sentence 3-8 words.'
+    };
+    const titleResponse = await getChatCompletion(
+      [systemPromptTitle, ...trimMessagesToFit(llmMessages, 'gpt-4.1-nano', 5000)],
+      'gpt-4.1-nano'
+    );
+    chatThread.title = titleResponse.data.choices[0].message.content;
+    await chatThread.save();
+  }
 }
 
 app.use(express.static('./public'));
