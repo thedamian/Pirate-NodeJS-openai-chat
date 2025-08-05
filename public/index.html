@@ -237,7 +237,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: inputContent }),
               });
-
               if (!res.body) throw new Error('No response body for streaming');
 
               const reader = res.body.getReader();
@@ -251,58 +250,60 @@
                 buffer += decoder.decode(value, { stream: true });
 
                 // Process all complete SSE events in buffer
-                let eventIdx;
-                while ((eventIdx = buffer.indexOf('\n\n')) !== -1) {
-                  const eventBlock = buffer.slice(0, eventIdx);
-                  buffer = buffer.slice(eventIdx + 2);
-                  await processEventBlock(eventBlock);
+                const events = buffer.split('\n\n');
+                // Keep the last incomplete event in buffer
+                buffer = events.pop();
+                for (const eventBlock of events) {
+                  done = await processEventBlock(eventBlock, assistantMsg);
                 }
               }
-            } catch (e) {
-              // Error during streaming
             } finally {
               streaming.value = false;
               sendingMessage.value = false;
             }
           }
 
-          async function processEventBlock(eventBlock) {
-            // Only process data: lines
+          async function processEventBlock(eventBlock, assistantMsg) {
             const lines = eventBlock.split('\n');
+            let done = false;
             for (const line of lines) {
               if (line.startsWith('data:')) {
                 const dataStr = line.replace(/^data:\s*/, '');
+                let data = null;
                 try {
-                  const data = JSON.parse(dataStr);
-                  if (data.token) {
-                    assistantStreamingContent.value += data.token;
-                    assistantMsg.content = assistantStreamingContent.value;
-                    await nextTick();
-                    scrollToBottom();
-                  }
-                  if (data.done) {
-                    // Replace temp assistant message with real one if needed
-                    if (data.assistantMessage) {
-                      assistantMsg._id = data.assistantMessage._id;
-                      assistantMsg.content = data.assistantMessage.content;
-                    }
-                    messages.value.push(assistantMsg);
-                    // Update thread title if changed
-                    if (data.chatThread) {
-                      const idx = threads.value.findIndex(t => t._id === data.chatThread._id);
-                      if (idx !== -1) threads.value[idx] = data.chatThread;
-                    }
-                    streaming.value = false;
-                    sendingMessage.value = false;
-                    await nextTick();
-                    scrollToBottom();
-                    done = true;
-                  }
+                  data = JSON.parse(dataStr);
                 } catch (e) {
-                  // Ignore parse errors
+                  continue;
+                }
+
+                if (data.token) {
+                  assistantStreamingContent.value += data.token;
+                  assistantMsg.content = assistantStreamingContent.value;
+                  await nextTick();
+                  scrollToBottom();
+                }
+                if (data.done) {
+                  // Replace temp assistant message with real one if needed
+                  if (data.assistantMessage) {
+                    assistantMsg._id = data.assistantMessage._id;
+                    assistantMsg.content = data.assistantMessage.content;
+                  }
+                  messages.value.push(assistantMsg);
+                  // Update thread title if changed
+                  if (data.chatThread) {
+                    const idx = threads.value.findIndex(t => t._id === data.chatThread._id);
+                    if (idx !== -1) threads.value[idx] = data.chatThread;
+                  }
+                  streaming.value = false;
+                  sendingMessage.value = false;
+                  await nextTick();
+                  scrollToBottom();
+                  done = true;
                 }
               }
             }
+
+            return done;
           }
 
           // Scroll chat to bottom
